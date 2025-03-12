@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+import bluetooth
+import subprocess
+
+def update_wifi_config(ssid, password):
+    # Yeni wpa_supplicant yapılandırması
+    new_conf = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+network={{
+    ssid="{ssid}"
+    psk="{password}"
+    key_mgmt=WPA-PSK
+}}
+"""
+    try:
+        with open("/etc/wpa_supplicant/wpa_supplicant.conf", "w") as f:
+            f.write(new_conf)
+        # WiFi bağlantısını yenilemek için ilgili servisi yeniden başlat
+        subprocess.run(["sudo", "systemctl", "restart", "dhcpcd"])
+        return "WiFi ayarları kaydedildi, bağlantı kuruluyor."
+    except Exception as e:
+        return f"Hata oluştu: {e}"
+
+def main():
+    # Bluetooth sunucusu oluşturuluyor
+    server_socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+    server_socket.bind(("", bluetooth.PORT_ANY))
+    server_socket.listen(1)
+
+    port = server_socket.getsockname()[1]
+
+    bluetooth.advertise_service(server_socket, "RaspberryPiWiFiSetup",
+                                service_classes=[bluetooth.SERIAL_PORT_CLASS],
+                                profiles=[bluetooth.SERIAL_PORT_PROFILE])
+
+    print(f"Bluetooth sunucusu çalışıyor... Port: {port}")
+    
+    while True:
+        client_socket, address = server_socket.accept()
+        print(f"Bağlanan cihaz: {address}")
+
+        try:
+            # Bluetooth üzerinden gelen veriyi al (örn. "MySSID,MyPassword")
+            data = client_socket.recv(1024).decode("utf-8").strip()
+            print("Alınan veri:", data)
+            
+            if data:
+                # Veriyi ayrıştır (virgülle ayrılmış SSID ve şifre)
+                try:
+                    ssid, password = data.split(",")
+                except ValueError:
+                    client_socket.send("Geçersiz format. Lütfen 'SSID,ŞİFRE' formatında gönderin.".encode("utf-8"))
+                    client_socket.close()
+                    continue
+
+                result = update_wifi_config(ssid, password)
+                client_socket.send(result.encode("utf-8"))
+        except Exception as err:
+            client_socket.send(f"Hata: {err}".encode("utf-8"))
+        finally:
+            client_socket.close()
+
+if __name__ == "__main__":
+    main()
